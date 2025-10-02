@@ -97,26 +97,37 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script_stop: true
           script: |
-            set -e
+            set -euxo pipefail
             cd /opt/cinereads
+            echo "=== Env / Files ==="
+            pwd; ls -la
+            command -v docker
+            docker --version
+            docker compose version || true
+            test -f docker-compose.prod.yml && echo "prod compose present"
+            test -f fetch_env.sh && echo "fetch_env present"
 
-            # login to GHCR (only needed if packages are private)
-            echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ steps.vars.outputs.owner_lc }} --password-stdin || true
+            # login to GHCR only if PAT is provided (images private)
+            if [ -n "${{ secrets.GHCR_PAT }}" ]; then
+              echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ steps.vars.outputs.owner_lc }} --password-stdin
+            else
+              echo "No GHCR_PAT provided; assuming packages are public."
+            fi
 
-            # write image tags for compose.prod
             cat > .env.docker <<EOV
             BACKEND_IMAGE=ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-backend:${{ github.sha }}
             FRONTEND_IMAGE=ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-frontend:${{ github.sha }}
             EOV
-            echo "Wrote .env.docker with image tags"
+            echo "=== .env.docker ==="; cat .env.docker
 
-            # fetch secrets from SSM into .env for the app
             ./fetch_env.sh
+            echo "=== .env (first two lines) ==="; head -n 2 .env
 
-            # pull and restart
+            set +e
             export $(cat .env.docker | xargs)
-            docker pull $BACKEND_IMAGE || true
-            docker pull $FRONTEND_IMAGE || true
-            docker compose -f docker-compose.prod.yml up -d
+            docker pull "$BACKEND_IMAGE"
+            docker pull "$FRONTEND_IMAGE"
+            set -e
 
-            docker system prune -f
+            docker compose -f docker-compose.prod.yml up -d
+            docker ps
