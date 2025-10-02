@@ -32,3 +32,9 @@ logs/
 
 # Cache
 cache/
+# python/node/venv
+.venv/
+backend/app/.venv/
+node_modules/
+*.log
+__pycache__/
