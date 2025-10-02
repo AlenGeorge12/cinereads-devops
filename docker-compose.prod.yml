@@ -1,0 +1,21 @@
+services:
+  backend:
+    image: ${BACKEND_IMAGE}
+    container_name: cinereads-backend
+    env_file:
+      - .env            # created on EC2 by fetch_env.sh
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    image: ${FRONTEND_IMAGE}
+    container_name: cinereads-frontend
+    depends_on:
+      - backend
+    ports:
+      - "80:80"

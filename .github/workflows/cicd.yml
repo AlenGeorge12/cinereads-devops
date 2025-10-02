@@ -1,0 +1,120 @@
+name: CineReads CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BACKEND: ghcr.io/${{ github.repository_owner }}/cinereads-backend
+  IMAGE_FRONTEND: ghcr.io/${{ github.repository_owner }}/cinereads-frontend
+
+jobs:
+  build_test_scan_push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Enable Buildx (faster and cache-friendly)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Backend build & push
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.backend
+          push: true
+          tags: |
+            ${{ env.IMAGE_BACKEND }}:latest
+            ${{ env.IMAGE_BACKEND }}:${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.IMAGE_BACKEND }}:latest
+          cache-to: type=inline
+
+      # Frontend build & push
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.frontend
+          push: true
+          tags: |
+            ${{ env.IMAGE_FRONTEND }}:latest
+            ${{ env.IMAGE_FRONTEND }}:${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.IMAGE_FRONTEND }}:latest
+          cache-to: type=inline
+
+      # Quick "smoke" checks (lightweight)
+      - name: Smoke test backend image
+        run: docker run --rm ${{ env.IMAGE_BACKEND }}:${{ github.sha }} uvicorn --version
+
+      - name: Smoke test frontend image
+        run: docker run --rm ${{ env.IMAGE_FRONTEND }}:${{ github.sha }} nginx -v || true
+
+      # Trivy scans (DevSecOps)
+      - name: Trivy scan backend
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: ${{ env.IMAGE_BACKEND }}:${{ github.sha }}
+          vuln-type: 'os,library'
+          format: 'table'
+          exit-code: '0'
+
+      - name: Trivy scan frontend
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: ${{ env.IMAGE_FRONTEND }}:${{ github.sha }}
+          vuln-type: 'os,library'
+          format: 'table'
+          exit-code: '0'
+
+  deploy:
+    needs: build_test_scan_push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to EC2 over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+            cd /opt/cinereads
+
+            # login to GHCR (if packages are private)
+            echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin || true
+
+            # write image tags for compose.prod
+            cat > .env.docker <<EOV
+            BACKEND_IMAGE=${{ env.IMAGE_BACKEND }}:${{ github.sha }}
+            FRONTEND_IMAGE=${{ env.IMAGE_FRONTEND }}:${{ github.sha }}
+            EOV
+            echo "Wrote .env.docker with image tags"
+
+            # fetch secrets from SSM into .env for the app
+            ./fetch_env.sh
+
+            # pull and restart
+            export $(cat .env.docker | xargs)
+            docker pull $BACKEND_IMAGE || true
+            docker pull $FRONTEND_IMAGE || true
+            docker compose -f docker-compose.prod.yml up -d
+
+            # prune old cruft
+            docker system prune -f
