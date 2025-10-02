@@ -99,35 +99,24 @@ jobs:
           script: |
             set -euxo pipefail
             cd /opt/cinereads
-            echo "=== Env / Files ==="
-            pwd; ls -la
-            command -v docker
-            docker --version
-            docker compose version || true
-            test -f docker-compose.prod.yml && echo "prod compose present"
-            test -f fetch_env.sh && echo "fetch_env present"
 
-            # login to GHCR only if PAT is provided (images private)
+            # Login to GHCR only if images are private
             if [ -n "${{ secrets.GHCR_PAT }}" ]; then
               echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ steps.vars.outputs.owner_lc }} --password-stdin
-            else
-              echo "No GHCR_PAT provided; assuming packages are public."
             fi
 
-            cat > .env.docker <<EOV
-            BACKEND_IMAGE=ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-backend:${{ github.sha }}
-            FRONTEND_IMAGE=ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-frontend:${{ github.sha }}
-            EOV
+            # Write a CLEAN env file (only KEY=VALUE lines)
+            printf 'BACKEND_IMAGE=%s\n'  "ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-backend:${{ github.sha }}" > .env.docker
+            printf 'FRONTEND_IMAGE=%s\n' "ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-frontend:${{ github.sha }}" >> .env.docker
             echo "=== .env.docker ==="; cat .env.docker
 
+            # Build app env from SSM into .env
+            chmod +x ./fetch_env.sh
             ./fetch_env.sh
-            echo "=== .env (first two lines) ==="; head -n 2 .env
+            echo "=== .env (first lines) ==="; head -n 5 .env || true
 
-            set +e
-            export $(cat .env.docker | xargs)
-            docker pull "$BACKEND_IMAGE"
-            docker pull "$FRONTEND_IMAGE"
-            set -e
+            # Pull & start using env-file (no 'export'!)
+            docker compose -f docker-compose.prod.yml --env-file .env.docker pull
+            docker compose -f docker-compose.prod.yml --env-file .env.docker up -d
 
-            docker compose -f docker-compose.prod.yml up -d
             docker ps
