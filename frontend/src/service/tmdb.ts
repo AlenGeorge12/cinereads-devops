@@ -1,4 +1,5 @@
 import { Movie } from '@/types';
+import { CineReadsAPI } from './api';
 
 const TMDB_API_KEY = '473496e0286c39ee2c92ec60c58ac047';
 const TMDB_READ_ACCESS_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI0NzM0OTZlMDI4NmMzOWVlMmM5MmVjNjBjNThhYzA0NyIsIm5iZiI6MTc1Mjk0ODgxOS4wNjIsInN1YiI6IjY4N2JlMDUzMjQyOWQ3NDI5M2Q5ODc5YyIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.bmVIZn4oME4P1WYm2ClDycDT_ackwpxIPoAAvRIULN8';
@@ -23,102 +24,50 @@ interface TMDBSearchResponse {
 class TMDBService {
   private apiKey: string;
   private readAccessToken: string;
+  private api: CineReadsAPI;
 
   constructor() {
     this.apiKey = TMDB_API_KEY;
     this.readAccessToken = TMDB_READ_ACCESS_TOKEN;
+    this.api = new CineReadsAPI();
   }
 
   async searchMovies(query: string): Promise<Movie[]> {
     if (!query || query.trim().length < 2) {
-      return [];
+      return this.getFallbackMovies(query);
     }
 
     try {
-      console.log('🎬 Searching TMDB for:', query);
-      
-      // Use the modern Bearer token approach for better authentication
-      const url = `${TMDB_BASE_URL}/search/movie?query=${encodeURIComponent(query)}&language=en-US&page=1&include_adult=false&sort_by=popularity.desc`;
-      console.log('🔗 TMDB URL:', url);
+      console.log('🎬 Searching movies for:', query);
 
-      const response = await fetch(url, {
+      // Call backend API instead of TMDB directly
+      const response = await fetch(`${this.api.baseURL}/search-movies?query=${encodeURIComponent(query)}`, {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.readAccessToken}`
         }
       });
 
-      console.log('📡 TMDB Response status:', response.status);
-
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ TMDB API error:', response.status, errorText);
-        throw new Error(`TMDB API error: ${response.status} - ${errorText}`);
+        throw new Error(`API Error: ${response.status} ${response.statusText}`);
       }
 
-      const data: TMDBSearchResponse = await response.json();
-      console.log('✅ TMDB Response data received:', data.total_results, 'results');
-      
-      if (!data.results || data.results.length === 0) {
-        console.warn('⚠️ No results in TMDB response');
-        return [];
-      }
+      const data = await response.json();
+      console.log('🔄 Search results:', data.results);
 
-      // Enhanced sorting and filtering
-      const sortedResults = data.results
-        .filter(movie => {
-          // Filter out movies with no title or very low quality data
-          return movie.title && 
-                 movie.title.trim().length > 0 && 
-                 movie.popularity > 0;
-        })
-        .sort((a, b) => {
-          // Multi-factor sorting for best results
-          
-          // 1. Prioritize exact matches in title
-          const queryLower = query.toLowerCase();
-          const aExactMatch = a.title.toLowerCase().includes(queryLower);
-          const bExactMatch = b.title.toLowerCase().includes(queryLower);
-          
-          if (aExactMatch && !bExactMatch) return -1;
-          if (!aExactMatch && bExactMatch) return 1;
-          
-          // 2. Sort by popularity (higher is better)
-          if (Math.abs(b.popularity - a.popularity) > 10) {
-            return b.popularity - a.popularity;
-          }
-          
-          // 3. Sort by vote average for similar popularity
-          if (Math.abs(b.vote_average - a.vote_average) > 0.5) {
-            return b.vote_average - a.vote_average;
-          }
-          
-          // 4. Prefer more recent releases
-          const aYear = a.release_date ? new Date(a.release_date).getFullYear() : 0;
-          const bYear = b.release_date ? new Date(b.release_date).getFullYear() : 0;
-          return bYear - aYear;
-        })
-        .slice(0, 12); // Get top 12 results
+      return data.results || this.getFallbackMovies(query);
 
-      console.log('🎯 Processed TMDB results:', sortedResults.length, 'movies');
-      
-      // Format movies with proper poster URLs
-      return sortedResults.map(movie => this.formatMovieWithPoster(movie));
     } catch (error) {
       console.error('💥 Error searching movies:', error);
-      
-      // Enhanced fallback with more movies based on search query
-      const fallbackMovies = this.getFallbackMovies(query);
-      console.log('🔄 Using fallback movies:', fallbackMovies.length);
-      return fallbackMovies;
+      console.log('🔄 Using fallback movies');
+      return this.getFallbackMovies(query);
     }
   }
 
   private getFallbackMovies(query: string): Movie[] {
     const queryLower = query.toLowerCase();
-    
+
     // Comprehensive fallback movie database
     const popularMovies: TMDBMovie[] = [
       {
@@ -135,45 +84,9 @@ class TMDBService {
         title: 'The Matrix',
         poster_path: '/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
         release_date: '1999-03-30',
-        vote_average: 8.2,
-        overview: 'Set in the 22nd century, The Matrix tells the story of a computer hacker who joins a group of underground insurgents.',
-        popularity: 143.2
-      },
-      {
-        id: 157336,
-        title: 'Interstellar',
-        poster_path: '/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg',
-        release_date: '2014-11-07',
-        vote_average: 8.4,
-        overview: 'The adventures of a group of explorers who make use of a newly discovered wormhole to surpass the limitations on human space travel.',
-        popularity: 139.5
-      },
-      {
-        id: 155,
-        title: 'The Dark Knight',
-        poster_path: '/qJ2tW6WMUDux911r6m7haRef0WH.jpg',
-        release_date: '2008-07-18',
         vote_average: 8.5,
-        overview: 'Batman raises the stakes in his war on crime with the help of Lt. Jim Gordon and District Attorney Harvey Dent.',
-        popularity: 135.8
-      },
-      {
-        id: 680,
-        title: 'Pulp Fiction',
-        poster_path: '/d5iIlFn5s0ImszYzBPb8JPIfbXD.jpg',
-        release_date: '1994-09-10',
-        vote_average: 8.3,
-        overview: 'A burger-loving hit man, his philosophical partner, and a drug-addled gangster\'s moll navigate a world of criminals.',
-        popularity: 128.4
-      },
-      {
-        id: 13,
-        title: 'Forrest Gump',
-        poster_path: '/arw2vcBveWOVZr6pxd9XTd1TdQa.jpg',
-        release_date: '1994-06-23',
-        vote_average: 8.2,
-        overview: 'A man with a low IQ has accomplished great things in his life and been present during significant historic events.',
-        popularity: 125.1
+        overview: 'A computer hacker learns from mysterious rebels about the true nature of his reality and his role in the war against its controllers.',
+        popularity: 140.0
       },
       {
         id: 550,
@@ -190,63 +103,42 @@ class TMDBService {
         poster_path: '/velWPhVMQeQKcxggNEU8YmIo52R.jpg',
         release_date: '1999-12-10',
         vote_average: 8.5,
-        overview: 'The story of John Coffey, a giant black man convicted of the brutal murder of two little girls.',
-        popularity: 119.3
+        overview: 'The lives of guards on Death Row are affected by one of their charges: a black man accused of child murder and rape, yet who has a mysterious gift.',
+        popularity: 110.0
+      },
+      {
+        id: 680,
+        title: 'Pulp Fiction',
+        poster_path: '/d5iIlFn5s0ImszYzBPb8JPIfbXD.jpg',
+        release_date: '1994-09-10',
+        vote_average: 8.5,
+        overview: 'A burger-loving hit man, his philosophical partner, a drug-addled gangster\'s moll and a washed-up boxer converge in this sprawling, comedic crime caper.',
+        popularity: 105.0
+      },
+      {
+        id: 155,
+        title: 'The Dark Knight',
+        poster_path: '/qJ2tW6WMUDux911r6m7haRef0WH.jpg',
+        release_date: '2008-07-18',
+        vote_average: 9.0,
+        overview: 'Batman raises the stakes in his war on crime. With the help of Lt. Jim Gordon and District Attorney Harvey Dent, Batman sets out to dismantle the remaining criminal organizations that plague the streets.',
+        popularity: 100.0
       }
     ];
-    
-    // Filter movies based on search query
-    const matchingMovies = popularMovies.filter(movie => 
-      movie.title.toLowerCase().includes(queryLower) ||
-      movie.overview.toLowerCase().includes(queryLower)
-    );
-    
-    // Return matching movies, or top popular ones if no matches
-    const resultMovies = matchingMovies.length > 0 ? matchingMovies : popularMovies.slice(0, 6);
-    return resultMovies.map(movie => this.formatMovieWithPoster(movie));
-  }
 
-  async getMovieDetails(movieId: number): Promise<TMDBMovie | null> {
-    try {
-      const response = await fetch(
-        `${TMDB_BASE_URL}/movie/${movieId}?language=en-US`,
-        {
-          headers: {
-            'Accept': 'application/json',
-            'Authorization': `Bearer ${this.readAccessToken}`
-          }
-        }
+    // Filter movies based on query if provided
+    if (queryLower) {
+      const filtered = popularMovies.filter(movie =>
+        movie.title.toLowerCase().includes(queryLower)
       );
-
-      if (!response.ok) {
-        throw new Error(`TMDB API error: ${response.status}`);
+      if (filtered.length > 0) {
+        return filtered.slice(0, 6);
       }
-
-      return await response.json();
-    } catch (error) {
-      console.error('Error fetching movie details:', error);
-      return null;
     }
-  }
 
-  formatMovieForDisplay(movie: TMDBMovie): string {
-    const year = movie.release_date ? ` (${new Date(movie.release_date).getFullYear()})` : '';
-    return `${movie.title}${year}`;
-  }
-
-  formatMovieWithPoster(movie: TMDBMovie): Movie {
-    return {
-      id: movie.id,
-      title: movie.title,
-      poster_path: movie.poster_path,
-      poster_url: movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : null,
-      release_date: movie.release_date,
-      overview: movie.overview,
-      vote_average: movie.vote_average,
-      popularity: movie.popularity
-    };
+    // Return top movies if no specific match
+    return popularMovies.slice(0, 6);
   }
 }
 
 export const tmdbService = new TMDBService();
-export type { TMDBMovie };

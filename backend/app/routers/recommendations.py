@@ -9,6 +9,7 @@ from app.models.response_models import (
 )
 from app.services.gpt_service import GPTService
 from app.services.hardcover_service import HardcoverService
+from app.services.tmdb_service import TMDBService
 from app.services.cache_service import CacheService, create_recommendation_cache_key, create_book_cache_key
 from app.config import settings
 import asyncio
@@ -22,7 +23,22 @@ router = APIRouter()
 # Initialize services
 gpt_service = GPTService()
 hardcover_service = HardcoverService()
+tmdb_service = TMDBService()
 cache_service = CacheService(cache_dir=settings.cache_dir)
+
+@router.get("/search-movies")
+async def search_movies(query: str = Query(..., description="Movie search query")):
+    """
+    Search for movies using TMDB API
+    """
+    try:
+        movies = await tmdb_service.search_movies(query)
+        return {"results": movies}
+    except Exception as e:
+        logger.error(f"Error searching movies: {e}")
+        # Return fallback movies on error
+        movies = tmdb_service._get_fallback_movies()
+        return {"results": movies}
 
 @router.post("/recommend", response_model=EnhancedRecommendationResponse)
 async def get_recommendations(

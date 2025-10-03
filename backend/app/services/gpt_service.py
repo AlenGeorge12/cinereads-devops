@@ -218,11 +218,229 @@ Select {books_count} books that share this aesthetic DNA. Prioritize:
             return f"Based on your taste profile from {', '.join(movies[:-1])}, and {movies[-1]}"
     
     def _create_fallback_response(self, movies: List[str]) -> List[RecommendationResponse]:
-        """Fallback response in case of parsing errors"""
-        logger.warning("Using fallback response due to GPT parsing error")
-        
-        # Create a simple unified recommendation
-        fallback_books = [
+        """Dynamic fallback response based on movie selection when GPT API is unavailable"""
+        logger.warning("Using dynamic fallback response due to GPT API unavailability")
+
+        # Create movie-based fallback recommendations
+        movie_themes = self._analyze_movie_themes(movies)
+        fallback_books = self._get_theme_based_books(movie_themes)
+
+        fallback_taste_profile = TasteProfile(
+            themes=movie_themes.get('themes', ["character development", "emotional depth"]),
+            narrative_style=movie_themes.get('narrative_style', "Engaging storytelling"),
+            emotional_tone=movie_themes.get('emotional_tone', "Thoughtful and immersive"),
+            genre_fusion=movie_themes.get('genre_fusion', "Diverse literary styles"),
+            character_preferences=movie_themes.get('character_preferences', "Complex characters"),
+            artistic_sensibilities=movie_themes.get('artistic_sensibilities', "Quality craftsmanship"),
+            confidence_score=0.7
+        )
+
+        movie_summary = self._create_movie_summary(movies, movie_themes)
+
+        return [RecommendationResponse(
+            movie=movie_summary,
+            books=fallback_books,
+            taste_profile=fallback_taste_profile
+        )]
+
+    def _analyze_movie_themes(self, movies: List[str]) -> Dict[str, Any]:
+        """Analyze movies to extract themes for fallback recommendations"""
+        # Simple keyword-based theme analysis
+        movie_text = " ".join(movies).lower()
+
+        themes = []
+        narrative_style = "Engaging storytelling"
+        emotional_tone = "Thoughtful and immersive"
+        genre_fusion = "Literary fiction"
+        character_preferences = "Complex characters"
+        artistic_sensibilities = "Quality craftsmanship"
+
+        # Action/Adventure themes
+        if any(word in movie_text for word in ['batman', 'superman', 'avengers', 'marvel', 'dc', 'hero', 'action', 'fight']):
+            themes.extend(["heroism", "justice", "moral complexity"])
+            narrative_style = "Epic storytelling with high stakes"
+            emotional_tone = "Intense and dramatic"
+            genre_fusion = "Adventure fiction with philosophical undertones"
+
+        # Sci-fi/Fantasy themes
+        if any(word in movie_text for word in ['star wars', 'jedi', 'force', 'space', 'alien', 'future', 'time', 'magic', 'dragon']):
+            themes.extend(["exploration", "wonder", "human potential"])
+            narrative_style = "Imaginative world-building"
+            emotional_tone = "Awe-inspiring and philosophical"
+            genre_fusion = "Speculative fiction with deep themes"
+
+        # Drama/Romance themes
+        if any(word in movie_text for word in ['love', 'romance', 'relationship', 'drama', 'heart', 'passion']):
+            themes.extend(["human connection", "emotional growth", "relationships"])
+            narrative_style = "Character-driven narratives"
+            emotional_tone = "Emotional and intimate"
+            genre_fusion = "Literary fiction with romantic elements"
+
+        # Mystery/Thriller themes
+        if any(word in movie_text for word in ['detective', 'mystery', 'thriller', 'crime', 'murder', 'investigation']):
+            themes.extend(["intrigue", "justice", "psychological depth"])
+            narrative_style = "Complex plotting with twists"
+            emotional_tone = "Suspenseful and intense"
+            genre_fusion = "Mystery and psychological fiction"
+
+        # Comedy themes
+        if any(word in movie_text for word in ['comedy', 'funny', 'laugh', 'humor', 'joke']):
+            themes.extend(["wit", "human folly", "social commentary"])
+            narrative_style = "Sharp and observant storytelling"
+            emotional_tone = "Witty and engaging"
+            genre_fusion = "Humorous literary fiction"
+
+        # Default themes if nothing matches
+        if not themes:
+            themes = ["character development", "emotional depth", "human experience"]
+
+        return {
+            'themes': themes,
+            'narrative_style': narrative_style,
+            'emotional_tone': emotional_tone,
+            'genre_fusion': genre_fusion,
+            'character_preferences': character_preferences,
+            'artistic_sensibilities': artistic_sensibilities
+        }
+
+    def _get_theme_based_books(self, movie_themes: Dict[str, Any]) -> List[BookRecommendation]:
+        """Get book recommendations based on analyzed movie themes"""
+
+        # Book database organized by themes
+        book_database = {
+            "heroism": [
+                BookRecommendation(
+                    title="The Name of the Wind",
+                    author="Patrick Rothfuss",
+                    reason="A hero's journey filled with wonder, danger, and personal growth, much like the epic adventures in superhero sagas.",
+                    taste_match_score=0.85,
+                    primary_appeal="Epic heroism and personal destiny"
+                ),
+                BookRecommendation(
+                    title="The Way of Kings",
+                    author="Brandon Sanderson",
+                    reason="Complex world-building with themes of honor, leadership, and moral dilemmas, appealing to fans of heroic narratives.",
+                    taste_match_score=0.82,
+                    primary_appeal="Epic fantasy with heroic themes"
+                )
+            ],
+            "justice": [
+                BookRecommendation(
+                    title="The City We Became",
+                    author="N.K. Jemisin",
+                    reason="Explores themes of community, justice, and urban life with a fantastical twist, perfect for those who enjoy moral complexity.",
+                    taste_match_score=0.88,
+                    primary_appeal="Social justice and community themes"
+                )
+            ],
+            "moral complexity": [
+                BookRecommendation(
+                    title="The Night Circus",
+                    author="Erin Morgenstern",
+                    reason="A magical competition that explores the gray areas of morality and human nature, much like anti-hero stories.",
+                    taste_match_score=0.80,
+                    primary_appeal="Moral ambiguity and complex characters"
+                )
+            ],
+            "exploration": [
+                BookRecommendation(
+                    title="Dune",
+                    author="Frank Herbert",
+                    reason="Epic exploration of alien worlds, politics, and human destiny, perfect for space opera enthusiasts.",
+                    taste_match_score=0.90,
+                    primary_appeal="Grand-scale exploration and world-building"
+                ),
+                BookRecommendation(
+                    title="The Left Hand of Darkness",
+                    author="Ursula K. Le Guin",
+                    reason="Thoughtful exploration of alien cultures and human nature, appealing to fans of deep speculative fiction.",
+                    taste_match_score=0.85,
+                    primary_appeal="Cultural exploration and philosophical depth"
+                )
+            ],
+            "wonder": [
+                BookRecommendation(
+                    title="American Gods",
+                    author="Neil Gaiman",
+                    reason="A modern fantasy filled with wonder, mythology, and magical realism that sparks imagination.",
+                    taste_match_score=0.83,
+                    primary_appeal="Mythological wonder and imagination"
+                )
+            ],
+            "human potential": [
+                BookRecommendation(
+                    title="Ender's Game",
+                    author="Orson Scott Card",
+                    reason="Explores human potential, strategy, and growth under pressure, much like coming-of-age hero stories.",
+                    taste_match_score=0.87,
+                    primary_appeal="Human potential and strategic thinking"
+                )
+            ],
+            "human connection": [
+                BookRecommendation(
+                    title="The Seven Husbands of Evelyn Hugo",
+                    author="Taylor Jenkins Reid",
+                    reason="Deep exploration of relationships, love, and human connection through a compelling life story.",
+                    taste_match_score=0.85,
+                    primary_appeal="Emotional relationships and human connection"
+                ),
+                BookRecommendation(
+                    title="Normal People",
+                    author="Sally Rooney",
+                    reason="Intimate portrayal of young love and emotional growth, perfect for romance and drama fans.",
+                    taste_match_score=0.82,
+                    primary_appeal="Intimate relationships and emotional depth"
+                )
+            ],
+            "emotional growth": [
+                BookRecommendation(
+                    title="Educated",
+                    author="Tara Westover",
+                    reason="A powerful story of personal growth, resilience, and self-discovery against all odds.",
+                    taste_match_score=0.88,
+                    primary_appeal="Personal growth and transformation"
+                )
+            ],
+            "intrigue": [
+                BookRecommendation(
+                    title="The Girl with the Dragon Tattoo",
+                    author="Stieg Larsson",
+                    reason="Complex mystery and investigation with psychological depth, appealing to thriller enthusiasts.",
+                    taste_match_score=0.86,
+                    primary_appeal="Intricate plotting and suspense"
+                )
+            ],
+            "psychological depth": [
+                BookRecommendation(
+                    title="Gone Girl",
+                    author="Gillian Flynn",
+                    reason="Psychological thriller exploring the dark sides of relationships and human nature.",
+                    taste_match_score=0.84,
+                    primary_appeal="Psychological complexity and tension"
+                )
+            ],
+            "wit": [
+                BookRecommendation(
+                    title="The Hitchhiker's Guide to the Galaxy",
+                    author="Douglas Adams",
+                    reason="Hilarious and witty exploration of the universe with clever humor and social commentary.",
+                    taste_match_score=0.89,
+                    primary_appeal="Intelligent humor and wit"
+                )
+            ],
+            "social commentary": [
+                BookRecommendation(
+                    title="Catch-22",
+                    author="Joseph Heller",
+                    reason="Satirical take on bureaucracy and human folly with sharp wit and social critique.",
+                    taste_match_score=0.87,
+                    primary_appeal="Satire and social commentary"
+                )
+            ]
+        }
+
+        # Default fallback books
+        default_books = [
             BookRecommendation(
                 title="The Seven Husbands of Evelyn Hugo",
                 author="Taylor Jenkins Reid",
@@ -245,24 +463,27 @@ Select {books_count} books that share this aesthetic DNA. Prioritize:
                 primary_appeal="Philosophical exploration"
             )
         ]
-        
-        fallback_taste_profile = TasteProfile(
-            themes=["character development", "emotional depth", "existential themes"],
-            narrative_style="Layered, character-driven storytelling",
-            emotional_tone="Thoughtful and introspective",
-            genre_fusion="Literary fiction with speculative elements",
-            character_preferences="Complex, well-developed characters",
-            artistic_sensibilities="Appreciation for literary craftsmanship",
-            confidence_score=0.6
-        )
-        
-        movie_summary = self._create_movie_summary(movies, {})
-        
-        return [RecommendationResponse(
-            movie=movie_summary,
-            books=fallback_books,
-            taste_profile=fallback_taste_profile
-        )]
+
+        # Collect books based on themes
+        selected_books = []
+        themes = movie_themes.get('themes', [])
+
+        for theme in themes:
+            if theme in book_database:
+                # Add up to 2 books per theme
+                theme_books = book_database[theme][:2]
+                for book in theme_books:
+                    if book not in selected_books:  # Avoid duplicates
+                        selected_books.append(book)
+
+        # If we don't have enough books, fill with defaults
+        while len(selected_books) < 3:
+            for default_book in default_books:
+                if default_book not in selected_books:
+                    selected_books.append(default_book)
+                    break
+
+        return selected_books[:3]  # Return exactly 3 books
 
     async def analyze_taste_profile(self, movies: List[str], preferences: UserPreferences = None) -> Dict[str, Any]:
         """

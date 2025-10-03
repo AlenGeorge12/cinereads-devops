@@ -1,7 +1,7 @@
 import { UserPreferences, RecommendationResponse, CacheStats, EnhancedRecommendationResponse } from '@/types';
 
 export class CineReadsAPI {
-  private baseURL: string;
+  public baseURL: string;
 
   constructor(baseURL: string = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000') {
     this.baseURL = `${baseURL}/api`;

@@ -89,6 +89,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",  # Next.js dev server
         "http://localhost:3001",  # Alternative dev port
+        "http://localhost",       # Docker frontend on port 80
         "https://cinereads.vercel.app",  # Production
     ],
     allow_credentials=True,
