@@ -89,6 +89,12 @@ jobs:
             fi
           done
 
+      - name: Show workspace
+        run: |
+          pwd
+          ls -la
+          ls -la deploy || true
+
       # Upload prod compose, nginx, and fetch_env.sh to EC2
       - name: Upload deploy files to EC2
         uses: appleboy/scp-action@v0.1.7
@@ -96,12 +102,17 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          # run from the checked-out repo
+          # ensure the action runs in the repo workspace
+          # (appleboy/scp-action respects the current working directory implicitly)
           source: |
-            docker-compose.prod.yml
-            deploy/nginx.conf
-            fetch_env.sh
+            ./docker-compose.prod.yml
+            ./deploy/nginx.conf
+            ./fetch_env.sh
           target: /opt/cinereads
           overwrite: true
+          strip_components: 0
+          rm: false
 
       # Deploy over SSH (write image tags, ensure awscli + permissions, compose up)
       - name: Deploy to EC2 over SSH
