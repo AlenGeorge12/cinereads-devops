@@ -85,33 +85,86 @@ jobs:
     needs: build_test_scan_push
     runs-on: ubuntu-latest
     steps:
-      # Upload prod compose and any scripts to EC2
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS CLI
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Start EC2 instance
+        run: |
+          set -e
+          INSTANCE_ID="${{ secrets.EC2_INSTANCE_ID }}"
+          echo "Starting EC2 instance: $INSTANCE_ID"
+
+          # Start the instance
+          aws ec2 start-instances --instance-ids "$INSTANCE_ID"
+
+          # Wait for instance to be running
+          echo "Waiting for instance to start..."
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+
+          # Get the public IP and verify it's associated
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids "$INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+
+          if [ "$PUBLIC_IP" = "None" ] || [ -z "$PUBLIC_IP" ]; then
+            echo "❌ No public IP associated with instance"
+            exit 1
+          fi
+
+          echo "✅ EC2 instance started with public IP: $PUBLIC_IP"
+
+          # Wait a bit more for SSH to be available
+          echo "Waiting for SSH to be available..."
+          for i in {1..30}; do
+            if nc -z "$PUBLIC_IP" 22 2>/dev/null; then
+              echo "✅ SSH is available"
+              break
+            fi
+            echo "Waiting for SSH... ($i/30)"
+            sleep 10
+          done
+
+      - name: Check deploy files exist
+        run: |
+          set -e
+          for f in docker-compose.prod.yml deploy/nginx.conf fetch_env.sh; do
+            [ -s "$f" ] || { echo "Missing or empty: $f"; exit 1; }
+          done
+          echo "✅ All deploy files found"
+
       - name: Upload deploy files to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "docker-compose.prod.yml,deploy/nginx.conf,fetch_env.sh"
-          target: "/opt/cinereads"
+          source: |
+            docker-compose.prod.yml
+            deploy/nginx.conf
+            fetch_env.sh
+          target: /opt/cinereads
           overwrite: true
 
-      # Make sure fetch_env.sh is executable
-      - name: chmod +x on EC2
+      - name: Set permissions on EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            set -e
+            set -eux
+            sudo mkdir -p /opt/cinereads
+            sudo chown -R $USER:$USER /opt/cinereads
             cd /opt/cinereads
             chmod +x fetch_env.sh
-
-            - name: Compute lowercase owner
-              id: vars
-              run: echo "owner_lc=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
-
       - name: Deploy to EC2 over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -123,14 +176,17 @@ jobs:
             set -euxo pipefail
             cd /opt/cinereads
 
+            # Compute lowercase owner for image names
+            owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+
             # Login to GHCR only if images are private
             if [ -n "${{ secrets.GHCR_PAT }}" ]; then
-              echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ steps.vars.outputs.owner_lc }} --password-stdin
+              echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u "$owner_lc" --password-stdin
             fi
 
             # Write a CLEAN env file (only KEY=VALUE lines)
-            printf 'BACKEND_IMAGE=%s\n'  "ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-backend:${{ github.sha }}" > .env.docker
-            printf 'FRONTEND_IMAGE=%s\n' "ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-frontend:${{ github.sha }}" >> .env.docker
+            printf 'BACKEND_IMAGE=%s\n'  "ghcr.io/$owner_lc/cinereads-backend:${{ github.sha }}" > .env.docker
+            printf 'FRONTEND_IMAGE=%s\n' "ghcr.io/$owner_lc/cinereads-frontend:${{ github.sha }}" >> .env.docker
             echo "=== .env.docker ==="; cat .env.docker
 
             # Build app env from SSM into .env
