@@ -33,9 +33,19 @@ if command -v aws &> /dev/null; then
 
     # Convert SSM parameter names to env var names and write to .env
     echo "$PARAMETERS" | while read -r param_name param_value; do
-        # Extract the parameter name (remove prefix)
+        # Skip empty rows that can produce malformed entries like '='
+        if [[ -z "${param_name}" || -z "${param_value}" ]]; then
+            continue
+        fi
+
+        # Extract the parameter name (remove prefix) and trim possible carriage returns
         env_name=$(basename "$param_name")
-        echo "$env_name=$param_value" >> "$ENV_FILE"
+        param_value=${param_value%$'\r'}
+
+        # Only write well-formed KEY=VALUE pairs
+        if [[ -n "${env_name}" ]]; then
+            echo "${env_name}=${param_value}" >> "$ENV_FILE"
+        fi
     done
 
     echo "Environment variables written to $ENV_FILE"
