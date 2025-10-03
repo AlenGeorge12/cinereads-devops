@@ -102,16 +102,14 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          # run from the checked-out repo
-          # ensure the action runs in the repo workspace
-          # (appleboy/scp-action respects the current working directory implicitly)
+          # run from the checked-out repo (use explicit workspace paths)
           source: |
-            ./docker-compose.prod.yml
-            ./deploy/nginx.conf
-            ./fetch_env.sh
+            ${{ github.workspace }}/docker-compose.prod.yml
+            ${{ github.workspace }}/deploy/nginx.conf
+            ${{ github.workspace }}/fetch_env.sh
           target: /opt/cinereads
           overwrite: true
-          strip_components: 0
+          strip_components: 3
           rm: false
 
       # Deploy over SSH (write image tags, ensure awscli + permissions, compose up)
