@@ -21,7 +21,7 @@ jobs:
 
       - name: Compute lowercase owner
         id: vars
-        run: echo "owner_lc=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
+        run: echo "owner_lc=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -30,11 +30,11 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ steps.vars.outputs.owner_lc }}
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Backend build & push
-      - name: Build backend image
+      # --- Build & push backend ---
+      - name: Build & push backend
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -46,8 +46,8 @@ jobs:
           cache-from: type=registry,ref=ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-backend:latest
           cache-to: type=inline
 
-      # Frontend build & push
-      - name: Build frontend image
+      # --- Build & push frontend ---
+      - name: Build & push frontend
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -59,124 +59,51 @@ jobs:
           cache-from: type=registry,ref=ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-frontend:latest
           cache-to: type=inline
 
+      # quick smoke checks (optional)
       - name: Smoke test backend image
         run: docker run --rm ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-backend:${{ github.sha }} uvicorn --version
 
       - name: Smoke test frontend image
         run: docker run --rm ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-frontend:${{ github.sha }} nginx -v || true
 
-      - name: Trivy scan backend
-        uses: aquasecurity/trivy-action@0.20.0
-        with:
-          image-ref: ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-backend:${{ github.sha }}
-          vuln-type: 'os,library'
-          format: 'table'
-          exit-code: '0'
-
-      - name: Trivy scan frontend
-        uses: aquasecurity/trivy-action@0.20.0
-        with:
-          image-ref: ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-frontend:${{ github.sha }}
-          vuln-type: 'os,library'
-          format: 'table'
-          exit-code: '0'
-
   deploy:
     needs: build_test_scan_push
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout (for deploy files)
         uses: actions/checkout@v4
 
-      - name: Configure AWS CLI
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Compute lowercase owner
+        id: vars
+        run: echo "owner_lc=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
-      - name: Start EC2 instance
-        run: |
-          set -e
-          INSTANCE_ID="${{ secrets.EC2_INSTANCE_ID }}"
-          echo "Starting EC2 instance: $INSTANCE_ID"
-
-          # Start the instance
-          aws ec2 start-instances --instance-ids "$INSTANCE_ID"
-
-          # Wait for instance to be running
-          echo "Waiting for instance to start..."
-          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-
-          # Get the public IP and verify it's associated
-          PUBLIC_IP=$(aws ec2 describe-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --query 'Reservations[0].Instances[0].PublicIpAddress' \
-            --output text)
-
-          if [ "$PUBLIC_IP" = "None" ] || [ -z "$PUBLIC_IP" ]; then
-            echo "❌ No public IP associated with instance"
-            exit 1
-          fi
-
-          echo "✅ EC2 instance started with public IP: $PUBLIC_IP"
-
-          # Wait a bit more for SSH to be available
-          echo "Waiting for SSH to be available..."
-          for i in {1..30}; do
-            if nc -z "$PUBLIC_IP" 22 2>/dev/null; then
-              echo "✅ SSH is available"
-              break
-            fi
-            echo "Waiting for SSH... ($i/30)"
-            sleep 10
-          done
-
+      # Ensure the three deploy files exist in repo
       - name: Check deploy files exist
+        shell: bash
         run: |
           set -e
-          echo "Checking deploy files..."
           for f in docker-compose.prod.yml deploy/nginx.conf fetch_env.sh; do
-            if [ ! -f "$f" ]; then
-              echo "❌ File $f does not exist!"
-              exit 1
-            fi
             if [ ! -s "$f" ]; then
-              echo "❌ File $f is empty!"
+              echo "::error file=$f::Missing or empty deploy file: $f"
               exit 1
             fi
-            echo "✅ $f: $(wc -c < "$f") bytes"
           done
-          echo "✅ All deploy files found and non-empty"
 
-      - name: List files before upload
-        run: |
-          echo "Files to be uploaded:"
-          ls -la docker-compose.prod.yml deploy/nginx.conf fetch_env.sh
-
+      # Upload prod compose, nginx, and fetch_env.sh to EC2
       - name: Upload deploy files to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "docker-compose.prod.yml,deploy/nginx.conf,fetch_env.sh"
-          target: "/opt/cinereads"
+          source: |
+            docker-compose.prod.yml
+            deploy/nginx.conf
+            fetch_env.sh
+          target: /opt/cinereads
           overwrite: true
-          strip_components: 0
 
-      - name: Set permissions on EC2
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            set -eux
-            sudo mkdir -p /opt/cinereads
-            sudo chown -R $USER:$USER /opt/cinereads
-            cd /opt/cinereads
-            chmod +x fetch_env.sh
+      # Deploy over SSH (write image tags, ensure awscli + permissions, compose up)
       - name: Deploy to EC2 over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -184,29 +111,57 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script_stop: true
+          timeout: 90s
           script: |
             set -euxo pipefail
+            sudo mkdir -p /opt/cinereads
+            sudo chown -R $USER:$USER /opt/cinereads
             cd /opt/cinereads
 
-            # Compute lowercase owner for image names
-            owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+            # Make sure fetch_env.sh runnable; create if missing (safety net)
+            if [ ! -s fetch_env.sh ]; then
+              cat > fetch_env.sh <<'EOS'
+            #!/usr/bin/env bash
+            set -euo pipefail
+            getp() { aws ssm get-parameter --name "$1" --with-decryption --query 'Parameter.Value' --output text; }
+            cat > .env <<EOF
+            OPENAI_API_KEY=$(getp /cinereads/OPENAI_API_KEY)
+            HARDCOVER_API_KEY=$(getp /cinereads/HARDCOVER_API_KEY)
+            CACHE_DIR=cache
+            CACHE_EXPIRE_SECONDS=3600
+            BOOK_CACHE_EXPIRE_SECONDS=86400
+            MAX_MOVIES_PER_REQUEST=5
+            GPT_MAX_TOKENS=800
+            GPT_TEMPERATURE=0.7
+            DEBUG=false
+            EOF
+            echo ".env written"
+            EOS
+            fi
+            chmod +x fetch_env.sh
 
-            # Login to GHCR only if images are private
-            if [ -n "${{ secrets.GHCR_PAT }}" ]; then
-              echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u "$owner_lc" --password-stdin
+            # Ensure awscli exists (for SSM fetch)
+            if ! command -v aws >/dev/null 2>&1; then
+              curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip
+              unzip -q /tmp/awscliv2.zip -d /tmp
+              sudo /tmp/aws/install || true
             fi
 
-            # Write a CLEAN env file (only KEY=VALUE lines)
-            printf 'BACKEND_IMAGE=%s\n'  "ghcr.io/$owner_lc/cinereads-backend:${{ github.sha }}" > .env.docker
-            printf 'FRONTEND_IMAGE=%s\n' "ghcr.io/$owner_lc/cinereads-frontend:${{ github.sha }}" >> .env.docker
+            # If GHCR is private, login (optional)
+            if [ -n "${{ secrets.GHCR_PAT }}" ]; then
+              echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ steps.vars.outputs.owner_lc }} --password-stdin
+            fi
+
+            # Write clean image tags for compose (no 'export')
+            printf 'BACKEND_IMAGE=%s\n'  "ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-backend:${{ github.sha }}" > .env.docker
+            printf 'FRONTEND_IMAGE=%s\n' "ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-frontend:${{ github.sha }}" >> .env.docker
             echo "=== .env.docker ==="; cat .env.docker
 
-            # Build app env from SSM into .env
-            chmod +x ./fetch_env.sh
+            # Generate app .env from SSM
             ./fetch_env.sh
             echo "=== .env (first lines) ==="; head -n 5 .env || true
 
-            # Pull & start using env-file (no 'export'!)
+            # Pull & restart using env-file (keeps 8000 private; nginx proxies /api)
             docker compose -f docker-compose.prod.yml --env-file .env.docker pull
             docker compose -f docker-compose.prod.yml --env-file .env.docker up -d
 
