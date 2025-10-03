@@ -31,6 +31,13 @@ if command -v aws &> /dev/null; then
         --query 'Parameters[*].[Name,Value]' \
         --output text)
 
+    # Bail out early if nothing was returned (prevents blank '.env'= lines later)
+    if [[ -z "${PARAMETERS//[[:space:]]/}" ]]; then
+        echo "❌ No parameters found under $SSM_PREFIX."
+        echo "   Verify AWS credentials and that SSM has entries such as $SSM_PREFIX/OPENAI_API_KEY."
+        exit 1
+    fi
+
     # Convert SSM parameter names to env var names and write to .env
     echo "$PARAMETERS" | while read -r param_name param_value; do
         # Skip empty rows that can produce malformed entries like '='
