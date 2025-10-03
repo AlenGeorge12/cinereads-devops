@@ -5,14 +5,14 @@ services:
       dockerfile: docker/Dockerfile.backend
     container_name: cinereads-backend
     env_file:
-      - backend/.env
+      - backend/.env         # your local dev env
     environment:
       UVICORN_APP: "app.main:app"
     ports:
-      - "8000:8000"
-    dns:
-      - 8.8.8.8
-      - 8.8.4.4
+      - "8000:8000"          # expose for local testing
+    volumes:
+      - cache:/app/cache     # persist cache locally
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 30s
@@ -25,9 +25,11 @@ services:
       dockerfile: docker/Dockerfile.frontend
     container_name: cinereads-frontend
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
-      - "80:80"
-    dns:
-      - 8.8.8.8
-      - 8.8.4.4
+      - "80:80"              # open http://localhost/
+    restart: unless-stopped
+
+volumes:
+  cache:

@@ -77,6 +77,15 @@ jobs:
         id: vars
         run: echo "owner_lc=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
+      - name: Show workspace
+        run: |
+          echo "== pwd =="; pwd
+          echo "== root files =="; ls -la
+          echo "== deploy/ =="; ls -la deploy || true
+          echo "== print first lines =="
+          head -n 5 docker-compose.prod.yml || true
+          head -n 5 fetch_env.sh || true
+
       # Ensure the three deploy files exist in repo
       - name: Check deploy files exist
         shell: bash
@@ -89,28 +98,17 @@ jobs:
             fi
           done
 
-      - name: Show workspace
-        run: |
-          pwd
-          ls -la
-          ls -la deploy || true
-
-      # Upload prod compose, nginx, and fetch_env.sh to EC2
+      # IMPORTANT: single-line, comma-separated list for 'source'
       - name: Upload deploy files to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          # run from the checked-out repo (use explicit workspace paths)
-          source: |
-            ${{ github.workspace }}/docker-compose.prod.yml
-            ${{ github.workspace }}/deploy/nginx.conf
-            ${{ github.workspace }}/fetch_env.sh
-          target: /opt/cinereads
+          source: "docker-compose.prod.yml,deploy/nginx.conf,fetch_env.sh"
+          target: "/opt/cinereads"
           overwrite: true
-          strip_components: 3
-          rm: false
+          debug: true
 
       # Deploy over SSH (write image tags, ensure awscli + permissions, compose up)
       - name: Deploy to EC2 over SSH
@@ -120,14 +118,61 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script_stop: true
-          timeout: 90s
+          timeout: 120s
           script: |
             set -euxo pipefail
             sudo mkdir -p /opt/cinereads
             sudo chown -R $USER:$USER /opt/cinereads
             cd /opt/cinereads
 
-            # Make sure fetch_env.sh runnable; create if missing (safety net)
+            # SAFETY NET: recreate files if somehow not uploaded
+            if [ ! -s docker-compose.prod.yml ]; then
+              cat > docker-compose.prod.yml <<'YML'
+            services:
+              backend:
+                image: ${BACKEND_IMAGE}
+                container_name: cinereads-backend
+                env_file:
+                  - .env
+                environment:
+                  UVICORN_APP: "app.main:app"
+                restart: unless-stopped
+                healthcheck:
+                  test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+                  interval: 30s
+                  timeout: 5s
+                  retries: 3
+              frontend:
+                image: ${FRONTEND_IMAGE}
+                container_name: cinereads-frontend
+                depends_on:
+                  backend:
+                    condition: service_healthy
+                ports:
+                  - "80:80"
+                restart: unless-stopped
+            YML
+            fi
+
+            if [ ! -s deploy/nginx.conf ]; then
+              mkdir -p deploy
+              cat > deploy/nginx.conf <<'NGX'
+            server {
+              listen 80;
+              server_name _;
+              root /usr/share/nginx/html;
+              location / { try_files $uri $uri/ /index.html; }
+              location /api/ {
+                proxy_pass http://cinereads-backend:8000/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_http_version 1.1;
+              }
+            }
+            NGX
+            fi
+
             if [ ! -s fetch_env.sh ]; then
               cat > fetch_env.sh <<'EOS'
             #!/usr/bin/env bash
@@ -156,21 +201,19 @@ jobs:
               sudo /tmp/aws/install || true
             fi
 
-            # If GHCR is private, login (optional)
+            # Login to GHCR only if necessary (private pkgs)
             if [ -n "${{ secrets.GHCR_PAT }}" ]; then
               echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ steps.vars.outputs.owner_lc }} --password-stdin
             fi
 
-            # Write clean image tags for compose (no 'export')
+            # Write image tags file (no 'export')
             printf 'BACKEND_IMAGE=%s\n'  "ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-backend:${{ github.sha }}" > .env.docker
             printf 'FRONTEND_IMAGE=%s\n' "ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-frontend:${{ github.sha }}" >> .env.docker
             echo "=== .env.docker ==="; cat .env.docker
 
-            # Generate app .env from SSM
             ./fetch_env.sh
             echo "=== .env (first lines) ==="; head -n 5 .env || true
 
-            # Pull & restart using env-file (keeps 8000 private; nginx proxies /api)
             docker compose -f docker-compose.prod.yml --env-file .env.docker pull
             docker compose -f docker-compose.prod.yml --env-file .env.docker up -d
 

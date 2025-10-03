@@ -3,10 +3,10 @@ services:
     image: ${BACKEND_IMAGE}
     container_name: cinereads-backend
     env_file:
-      - .env
+      - .env                 # created on EC2 by ./fetch_env.sh
     environment:
       UVICORN_APP: "app.main:app"
-    # Keep backend internal-only in prod
+    # keep backend internal in prod (no public port)
     # ports:
     #   - "8000:8000"
     restart: unless-stopped
@@ -23,5 +23,5 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "80:80"
+      - "80:80"              # public entry
     restart: unless-stopped
