@@ -85,9 +85,32 @@ jobs:
     needs: build_test_scan_push
     runs-on: ubuntu-latest
     steps:
-      - name: Compute lowercase owner
-        id: vars
-        run: echo "owner_lc=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
+      # Upload prod compose and any scripts to EC2
+      - name: Upload deploy files to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.prod.yml,deploy/nginx.conf,fetch_env.sh"
+          target: "/opt/cinereads"
+          overwrite: true
+
+      # Make sure fetch_env.sh is executable
+      - name: chmod +x on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/cinereads
+            chmod +x fetch_env.sh
+
+            - name: Compute lowercase owner
+              id: vars
+              run: echo "owner_lc=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
 
       - name: Deploy to EC2 over SSH
         uses: appleboy/ssh-action@v1.0.3
