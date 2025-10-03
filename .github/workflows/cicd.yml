@@ -95,17 +95,6 @@ jobs:
           done
 
       # Use single-line, comma-separated source
-      - name: Upload deploy files to EC2
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          source: "docker-compose.prod.yml,deploy/nginx.conf,fetch_env.sh"
-          target: "/opt/cinereads"
-          overwrite: true
-          debug: true
-
       - name: Deploy to EC2 over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -120,7 +109,7 @@ jobs:
             sudo chown -R $USER:$USER /opt/cinereads
             cd /opt/cinereads
 
-            # SAFETY NET: recreate files on EC2 if missing
+            # --- safety nets: recreate compose/nginx if missing ---
             if [ ! -s docker-compose.prod.yml ]; then
               cat > docker-compose.prod.yml <<'YML'
             services:
@@ -168,16 +157,26 @@ jobs:
             NGX
             fi
 
-            if [ ! -s fetch_env.sh ]; then
-              cat > fetch_env.sh <<'EOS'
+            # --- ALWAYS overwrite fetch_env.sh so old '/cinereads/prod' logic can't linger ---
+            cat > fetch_env.sh <<'EOS'
             #!/usr/bin/env bash
             set -euo pipefail
-            getp() { aws ssm get-parameter --name "$1" --with-decryption --query 'Parameter.Value' --output text; }
             PREFIX="${PARAM_PREFIX:-/cinereads}"
-            echo "Fetching params under $PREFIX"
+            echo "Fetching parameters under ${PREFIX}"
+
+            getp() {
+              aws ssm get-parameter --name "$1" --with-decryption --query 'Parameter.Value' --output text
+            }
+
+            # sanity check that first param exists to fail fast with a clear message
+            if ! getp "${PREFIX}/OPENAI_API_KEY" >/dev/null 2>&1; then
+              echo "❌ Could not read ${PREFIX}/OPENAI_API_KEY from SSM. Check IAM role & Parameter Store path."
+              exit 1
+            fi
+
             cat > .env <<EOF
-            OPENAI_API_KEY=$(getp $PREFIX/OPENAI_API_KEY)
-            HARDCOVER_API_KEY=$(getp $PREFIX/HARDCOVER_API_KEY)
+            OPENAI_API_KEY=$(getp ${PREFIX}/OPENAI_API_KEY)
+            HARDCOVER_API_KEY=$(getp ${PREFIX}/HARDCOVER_API_KEY)
             CACHE_DIR=cache
             CACHE_EXPIRE_SECONDS=3600
             BOOK_CACHE_EXPIRE_SECONDS=86400
@@ -186,33 +185,32 @@ jobs:
             GPT_TEMPERATURE=0.7
             DEBUG=false
             EOF
-            echo ".env written"
+
+            echo ".env written with values from ${PREFIX}"
             EOS
-            fi
             chmod +x fetch_env.sh
 
-            # Ensure awscli is present
+            # ensure awscli exists
             if ! command -v aws >/dev/null 2>&1; then
               curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip
               unzip -q /tmp/awscliv2.zip -d /tmp
               sudo /tmp/aws/install || true
             fi
 
-            # Login to GHCR if packages are private
+            # login to GHCR if needed
             if [ -n "${{ secrets.GHCR_PAT }}" ]; then
-              echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ steps.vars.outputs.owner_lc }} --password-stdin
+              echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
             fi
 
-            # Image tags file for compose
-            printf 'BACKEND_IMAGE=%s\n'  "ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-backend:${{ github.sha }}" > .env.docker
-            printf 'FRONTEND_IMAGE=%s\n' "ghcr.io/${{ steps.vars.outputs.owner_lc }}/cinereads-frontend:${{ github.sha }}" >> .env.docker
+            # image tags for compose
+            printf 'BACKEND_IMAGE=%s\n'  "ghcr.io/${{ github.repository_owner }}/cinereads-backend:${{ github.sha }}" > .env.docker
+            printf 'FRONTEND_IMAGE=%s\n' "ghcr.io/${{ github.repository_owner }}/cinereads-frontend:${{ github.sha }}" >> .env.docker
             echo "=== .env.docker ==="; cat .env.docker
 
-            # IMPORTANT: tell the script to use /cinereads
+            # use the correct SSM prefix
             PARAM_PREFIX=/cinereads ./fetch_env.sh
             echo "=== .env (first lines) ==="; head -n 5 .env || true
 
             docker compose -f docker-compose.prod.yml --env-file .env.docker pull
             docker compose -f docker-compose.prod.yml --env-file .env.docker up -d
-
             docker ps
