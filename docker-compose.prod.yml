@@ -2,12 +2,15 @@ services:
   backend:
     image: ${BACKEND_IMAGE}
     container_name: cinereads-backend
+    environment:
+      UVICORN_APP: "app.main:app"
     env_file:
-      - .env            # created on EC2 by fetch_env.sh
+      - .env        # created by ./fetch_env.sh
     ports:
       - "8000:8000"
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -16,6 +19,8 @@ services:
     image: ${FRONTEND_IMAGE}
     container_name: cinereads-frontend
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "80:80"
+    restart: unless-stopped
